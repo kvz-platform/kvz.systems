@@ -1,0 +1,1278 @@
+# kvz: full documentation
+
+> Every kvz setup and reference document in one file, generated from
+> https://github.com/kvz-platform/kvz at commit e3897af.
+> The index with links is https://kvz.systems/llms.txt.
+
+---
+
+<!-- source: https://github.com/kvz-platform/kvz/blob/main/README.md -->
+
+<p align="center">
+  <img alt="kvz: native macOS Kubernetes. The control plane runs directly on macOS, one pod to Ready in 99 ms, Linux, macOS and native pods in one cluster." src="docs/assets/kvz-overview.png" width="100%">
+</p>
+
+# kvz
+
+**Kubernetes that runs natively on your Mac.** kvz is a single binary, in the
+spirit of k3s. The whole control plane (etcd, the API server, the scheduler and
+the controllers) runs as one ordinary macOS process, with no Linux VM
+underneath. Your pods run as:
+
+- **Linux pods.** Each one is its own lightweight VM, ready in about 100 ms.
+- **macOS pods.** A full macOS virtual machine you can `kubectl exec` into.
+- **Native pods.** Plain macOS processes, for Xcode builds, code signing or
+  anything that needs the real Mac.
+
+You use it with the same `kubectl` and YAML you already know.
+
+## Demo
+
+<a href="https://youtu.be/GUZCElkfb1U">
+  <img alt="Watch the kvz demo on YouTube" src="docs/assets/kvz-demo-video-v1.png" width="100%">
+</a>
+
+## Quick start
+
+You need an Apple Silicon Mac running macOS 26 or later.
+
+```sh
+brew install kvz-platform/tap/kvz
+kvz server                      # starts the cluster and prints how to connect
+```
+
+In a second terminal:
+
+```sh
+export KUBECONFIG=~/.kvz/kubeconfig.yaml
+kubectl run web --image=nginx:alpine
+kubectl get pods
+```
+
+That pod is a fresh Linux VM. The [getting started guide](docs/getting-started.md)
+covers macOS and native pods, adding more Macs, running kvz in the background,
+and building from source.
+
+## How it compares
+
+<p align="center">
+  <img alt="kvz benchmark results against k3s in Lima and Apple container cluster" src="docs/assets/kvz-benchmarks.png" width="100%">
+</p>
+
+kvz is measured against **k3s in Lima** and **Apple's `container cluster`** on
+three M4 Mac minis and a Mac Studio. It's faster on every lifecycle metric we
+measured: startup, idle cost, API throughput, pod start, bursts and teardown.
+It's slower at pod-to-pod bandwidth, because every pod is its own VM. No VM
+pools, snapshots or pre-started pods are used to get these numbers.
+
+Full tables and method: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
+## Documentation
+
+| Guide | What's in it |
+|---|---|
+| [Getting started](docs/getting-started.md) | Install, run your first pods, add Macs, run as a service |
+| [Fleet setup](docs/fleet.md) | Turn several Macs (a shelf of Mac minis) into one cluster, step by step; written so an AI agent can follow it too |
+| [Runtimes](docs/runtimes.md) | Linux, macOS and native pods: how each works and when to use it |
+| [Kubernetes features](docs/kubernetes-features.md) | What works today, and the known limits |
+| [Operations](docs/operations.md) | Flags, files, snapshots, upgrades and uninstalling |
+| [Automated upgrades](docs/upgrades.md) | Roll a new kvz release across the cluster with k3s-style Plans |
+| [Architecture](docs/ARCHITECTURE.md) | How kvz embeds Kubernetes on macOS |
+| [Benchmarks](docs/BENCHMARKS.md) | Every result, per machine, with the method |
+| [Optimization report](docs/REPORT.md) | How Linux pods went from 12 s to 0.25 s |
+| [Contributing](CONTRIBUTING.md) | Building, testing and sending changes |
+| [Releasing](docs/releasing.md) | Version numbers, CI and how releases ship |
+
+## Status
+
+kvz is young. It passes all 454 tests of the Kubernetes certified-conformance
+suite (Sonobuoy, Kubernetes v1.37.2, two nodes) and runs real workloads
+(Deployments, StatefulSets, Jobs, Services, Ingress, volumes, hostNetwork,
+resource limits, HA control planes), but nobody has run it in production yet,
+so please don't run production on it yet.
+
+Found a security problem? Please report it privately, as described in
+[SECURITY.md](SECURITY.md). The brand assets (logos, banners, social images)
+are in [docs/assets/brand-v1](docs/assets/brand-v1).
+
+## License
+
+kvz is licensed under the [Apache License 2.0](LICENSE). Vendored code in
+`third_party/` keeps its own license (Apache 2.0 or MIT), in each directory.
+
+---
+
+<!-- source: https://github.com/kvz-platform/kvz/blob/main/docs/fleet.md -->
+
+# Setting up a fleet of Macs
+
+This guide turns several Macs (for example a shelf of Mac minis) into one kvz
+cluster that starts on boot. It's written so that a person or an AI agent with
+SSH access to the Macs can follow it step by step. Every step says how to check
+that it worked before moving on.
+
+If you only have one Mac, [Getting started](getting-started.md) is shorter.
+
+## Contents
+
+1. [Plan the cluster](#1-plan-the-cluster)
+2. [Prepare every Mac](#2-prepare-every-mac)
+3. [Network](#3-network)
+4. [Install kvz on every Mac](#4-install-kvz-on-every-mac)
+5. [Start the first server](#5-start-the-first-server)
+6. [Add more servers (high availability only)](#6-add-more-servers-high-availability-only)
+7. [Join the other Macs as agents](#7-join-the-other-macs-as-agents)
+8. [Verify the cluster](#8-verify-the-cluster)
+9. [Use the cluster from another computer](#9-use-the-cluster-from-another-computer)
+10. [Day-2 operations](#10-day-2-operations)
+11. [Troubleshooting](#11-troubleshooting)
+12. [Getting help and reporting problems](#12-getting-help-and-reporting-problems)
+
+## 1. Plan the cluster
+
+Every Mac is either a **server** (runs the control plane: etcd, the API server,
+the scheduler and controllers, plus a node) or an **agent** (only runs pods).
+
+| Fleet size | Layout | Survives |
+|---|---|---|
+| 1 to 3 Macs | 1 server, the rest agents | nothing if the server Mac goes down (pods on agents keep running, but nothing can be changed) |
+| 3 or more Macs, uptime matters | 3 servers with `--cluster-init`, the rest agents | the loss of any one server |
+
+Use an odd number of servers (1, 3 or 5). Two servers are worse than one: etcd
+needs a majority, so losing either of two stops the cluster.
+
+Write down, before you start:
+
+- each Mac's role, SSH address and host name;
+- the address the Macs will use to reach each other (see [Network](#3-network));
+- which Mac is the **first server**. Every other Mac joins through it.
+
+## 2. Prepare every Mac
+
+Do this on every Mac. All commands run over SSH as the user who will run kvz.
+That user must be an administrator, and kvz runs in that user's login session.
+
+### Requirements
+
+```sh
+uname -m                 # must print arm64 (Apple Silicon)
+sw_vers -productVersion  # must be 26 or later
+df -h ~                  # leave at least 20 GB free for images and volumes
+```
+
+### A unique name
+
+kvz uses the host name, lowercased and without `.local`, as the node name, so
+every Mac needs a different one. Two Macs called `Mac-mini` would fight over
+the same node.
+
+```sh
+scutil --get LocalHostName
+# if it isn't unique:
+sudo scutil --set ComputerName  mini-01
+sudo scutil --set HostName      mini-01
+sudo scutil --set LocalHostName mini-01
+```
+
+You can also pass `--node-name` to kvz instead.
+
+### Remote login, sleep and power
+
+```sh
+sudo systemsetup -setremotelogin on      # SSH (skip if you're already using it)
+sudo pmset -a sleep 0 disksleep 0 displaysleep 0   # never sleep
+sudo pmset -a autorestart 1              # power back on after a power cut
+sudo pmset -a womp 1                     # wake for network access
+```
+
+Check with `pmset -g`: `sleep` must be `0`.
+
+### Automatic login (required)
+
+kvz runs as a launchd service in the user's **GUI login session**, because
+Apple's Virtualization.framework, which every pod uses, needs one. A Mac that
+reboots and sits at the login window runs no kvz. Turn on automatic login for
+the kvz user:
+
+- **System Settings → Users & Groups → Automatically log in as**, or
+- over SSH: `sudo sysadminctl -autologin set -userName "$USER" -password '<that user’s password>'`
+
+Automatic login is only possible with **FileVault turned off**
+(`fdesetup status`). If FileVault must stay on, someone has to log in at the
+console (or over Screen Sharing) after each reboot.
+
+To check that a GUI session exists right now:
+
+```sh
+launchctl print gui/$(id -u) >/dev/null && echo "GUI session: yes"
+```
+
+## 3. Network
+
+### Which address
+
+Every Mac must reach every other Mac directly. kvz picks the address it
+advertises (`--node-ip`) like this: a **Tailscale** address (100.64.0.0/10) if
+the Mac has one, otherwise the first IPv4 address on an `en*` interface.
+
+- **Tailscale (recommended for fleets).** Install it on every Mac and log in to
+  the same tailnet. kvz uses the Tailscale addresses on its own, they don't
+  change when the Macs move, and they avoid macOS's Local Network permission
+  (see below). Make sure your tailnet ACL lets the Macs reach each other on the
+  ports below.
+- **A plain LAN.** Give each Mac a fixed address (a DHCP reservation). If a Mac
+  has several interfaces (Wi-Fi and Ethernet, or a VPN), pass `--node-ip` with
+  the address the others should use, to the server and to every agent.
+
+### Ports
+
+| Port | Protocol | Open on | Used by |
+|---|---|---|---|
+| 6443 | TCP | servers | Kubernetes API (`kubectl`, agents) |
+| 6444 | TCP | servers | join endpoint (always the API port + 1) |
+| 10250 | TCP | every Mac | API server to node: `kubectl logs`, `exec`, metrics |
+| 6446 | TCP | every Mac | the pod network between Macs |
+| 2380 | TCP | servers (HA only) | etcd between servers (mutual TLS) |
+| 30000 to 32767 | TCP/UDP | every Mac | NodePort Services, if you use them |
+
+### macOS firewall and Local Network permission
+
+- If the macOS Application Firewall is on
+  (`/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate`), allow
+  kvz after installing it:
+
+  ```sh
+  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$(readlink -f "$(which kvz)")"
+  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$(readlink -f "$(which kvz)")"
+  ```
+
+- macOS asks for **Local Network** permission the first time a program
+  connects to another device on the LAN. On a headless Mac nobody sees that
+  prompt, and the connections fail with `no route to host`. If an agent can't
+  reach a server's LAN address even though `ping` works, open **System Settings
+  → Privacy & Security → Local Network** (over Screen Sharing) and allow kvz,
+  or use Tailscale addresses instead.
+
+## 4. Install kvz on every Mac
+
+```sh
+brew install kvz-platform/tap/kvz
+kvz version
+```
+
+Every Mac must run the **same** kvz version; compare the `kvz version` output
+across the fleet. Homebrew installs the binary and the small Linux kernel that
+pods boot; nothing else is needed. (Without Homebrew, unpack the release tarball
+from the [releases page](https://github.com/kvz-platform/kvz/releases) and use
+its `bin/kvz`; it finds the kernel in `share/kvz/kernel` next to it.)
+
+Install `tart` too (`brew install cirruslabs/cli/tart`) only if you plan to run
+macOS VM pods from OCI images.
+
+## 5. Start the first server
+
+On the first server Mac:
+
+```sh
+kvz install server                  # one server
+# or, for high availability:
+kvz install server --cluster-init
+```
+
+Add `--node-ip <address>` if the Mac has more than one possible address, and
+`--tls-san <name>` for any extra DNS name you'll use to reach the API server.
+`kvz install` writes a launchd service
+(`~/Library/LaunchAgents/dev.kvz.server.plist`) that starts now, at every login,
+and again if kvz exits. Its log is `~/.kvz/logs/kvz-server.log`.
+
+Wait until the node is Ready (usually a few seconds):
+
+```sh
+until kvz kubectl get nodes 2>/dev/null | grep -q ' Ready'; do sleep 1; done
+kvz kubectl get nodes -o wide
+```
+
+Then collect the two things every other Mac needs:
+
+```sh
+cat ~/.kvz/join-token                                    # TOKEN, looks like K10…::…
+awk '/server:/{print $2}' ~/.kvz/kubeconfig-external.yaml   # SERVER_URL, https://<address>:6443
+```
+
+`SERVER_URL` uses the address this server advertises. Check it's one the other
+Macs can reach; if not, reinstall the server with `--node-ip`. Treat the token
+like a password: it lets a machine join the cluster.
+
+## 6. Add more servers (high availability only)
+
+Skip this with a single server. On each additional server Mac, **one at a
+time**:
+
+```sh
+kvz install server --server SERVER_URL --token TOKEN
+```
+
+Wait for it to be Ready before adding the next. Check from the first server:
+
+```sh
+kvz kubectl get nodes
+```
+
+New servers join etcd as learners and are promoted once they have caught up. HA
+mode is remembered in each server's data directory, so the service needs no
+extra flags after a restart.
+
+## 7. Join the other Macs as agents
+
+On every agent Mac (these can join in parallel):
+
+```sh
+kvz install agent --server SERVER_URL --token TOKEN
+```
+
+With several servers, any server's URL works: agents learn about every server
+and keep a local load balancer in front of them, so they carry on when one goes
+down. The agent's log is `~/.kvz/logs/kvz-agent.log`.
+
+## 8. Verify the cluster
+
+Run these on a server Mac (`kvz kubectl` uses `~/.kvz/kubeconfig.yaml` there).
+
+**Every Mac is a Ready node, on the same version:**
+
+```sh
+kvz kubectl get nodes -o wide
+```
+
+**Pods start on every Mac, and reach each other across Macs:**
+
+```sh
+N=$(kvz kubectl get nodes --no-headers | wc -l | tr -d ' ')
+kvz kubectl create deployment fleet-check --image=nginx:alpine --replicas=$((N*2))
+kvz kubectl expose deployment fleet-check --port=80
+kvz kubectl rollout status deployment/fleet-check --timeout=180s
+kvz kubectl get pods -l app=fleet-check -o wide      # NODE column: every Mac should appear
+for node in $(kvz kubectl get nodes -o name | cut -d/ -f2); do
+  kvz kubectl run "net-$node" --rm -i --restart=Never --image=alpine:3.22 \
+    --overrides="{\"spec\":{\"nodeName\":\"$node\"}}" -- \
+    wget -qO- -T5 http://fleet-check.default.svc.cluster.local | grep -q 'Welcome to nginx' \
+    && echo "$node: ok" || echo "$node: FAILED"
+done
+kvz kubectl delete deployment,service fleet-check
+```
+
+Every node must print `ok`. That one check covers pod start-up on each Mac,
+cluster DNS, Services and the pod network between Macs.
+
+## 9. Use the cluster from another computer
+
+Each server writes `~/.kvz/kubeconfig-external.yaml`, which points at its own
+address. Copy it to your laptop:
+
+```sh
+scp mini-01:.kvz/kubeconfig-external.yaml ~/.kube/kvz.yaml
+KUBECONFIG=~/.kube/kvz.yaml kubectl get nodes
+```
+
+It holds cluster-admin credentials, so keep it private. The API server's
+certificate covers the server's address and host name; add more names with
+`--tls-san`.
+
+## 10. Day-2 operations
+
+| Task | How |
+|---|---|
+| Upgrade every Mac | Apply an `upgrade.cattle.io/v1` Plan; kvz drains and upgrades each Mac in turn, servers first, and rolls back a Mac whose new release doesn't start. See [upgrades.md](upgrades.md). This needs a release newer than v1.37.2-2; check with `kvz kubectl api-resources \| grep plans`. On older releases, `brew upgrade kvz` on each Mac, servers first. |
+| Back up the datastore | `kvz etcd-snapshot save --name <name>` on a server; automatic snapshots run every 12 hours. See [operations.md](operations.md#backups-and-restores). |
+| Add a Mac | Steps 2 to 4, then step 6 or 7. |
+| Remove a Mac | `kvz kubectl drain <node> --ignore-daemonsets --delete-emptydir-data`, then on that Mac `kvz uninstall --purge`, then `kvz kubectl delete node <node>`. |
+| Reboot a Mac | Just reboot. With automatic login, kvz comes back on its own. |
+| Watch logs | `tail -f ~/.kvz/logs/kvz-server.log` (or `kvz-agent.log`) on that Mac. |
+| Inspect a node's pod network | `kvz kubectl get --raw /api/v1/nodes/<node>/proxy/debug/kvz/podnet` |
+| Registry mirrors and credentials | `~/.kvz/registries.yaml` on every Mac. See [operations.md](operations.md#registry-mirrors). |
+
+All flags and files are listed in [operations.md](operations.md).
+
+## 11. Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `kvz install` fails with `launchctl bootstrap: … Bootstrap failed` | The user has no GUI login session | Turn on automatic login (step 2), reboot or log in once, run `kvz install` again |
+| kvz stops after a reboot | The Mac is at the login window | Automatic login; FileVault must be off |
+| An agent never appears in `get nodes` | It can't reach the server on 6443/6444, or the token is wrong | `nc -vz <server address> 6443` and `nc -vz <server address> 6444` from the agent; read `~/.kvz/logs/kvz-agent.log`; re-copy the token |
+| `no route to host` to a LAN address that answers `ping` | macOS Local Network permission | Allow kvz under Privacy & Security → Local Network, or use Tailscale addresses |
+| Two Macs show up as one node, or flip back and forth | Duplicate host names | Give each Mac a unique name (step 2) or `--node-name` |
+| A node is `NotReady` | That Mac is asleep, offline or kvz isn't running | `pmset -g`, then `launchctl print gui/$(id -u)/dev.kvz.agent` (or `dev.kvz.server`) and the log |
+| `kubectl logs` / `exec` fail for pods on one Mac | Port 10250 on that Mac isn't reachable from the servers | Open it in the firewall or ACL |
+| Pods on different Macs can't reach each other | Port 6446 is blocked, or `--node-ip` is an address the others can't reach | Open 6446; set `--node-ip` on that Mac and reinstall |
+| Pods stay `Pending` on a full Mac | About 120 Linux pods per Mac is the limit (Virtualization.framework caps VMs per host) | Add Macs |
+| Pods stuck in `ContainerCreating` | A volume, image or certificate isn't ready | `kvz kubectl describe pod <pod>`: the events say which |
+| Everything else | | Run `kvz server --verbose` (or the agent) in a terminal after `kvz uninstall` to watch every component's logs live |
+
+To change a service's flags, run `kvz install server|agent …` again with the
+new flags; it replaces the old service.
+
+## 12. Getting help and reporting problems
+
+- **Source code and docs:** <https://github.com/kvz-platform/kvz>
+- **Bugs:** <https://github.com/kvz-platform/kvz/issues/new/choose>. Include
+  `kvz version`, `sw_vers -productVersion`, the number of Macs and their roles,
+  `kvz kubectl get nodes -o wide`, and the relevant part of
+  `~/.kvz/logs/kvz-*.log`. **Remove join tokens and kubeconfig contents first.**
+- **Questions and ideas:** <https://github.com/kvz-platform/kvz/discussions>
+- **Security vulnerabilities:** report privately, never in a public issue:
+  <https://github.com/kvz-platform/kvz/security/advisories/new> (see
+  [SECURITY.md](../SECURITY.md)).
+- **Releases and changelog:** <https://github.com/kvz-platform/kvz/releases>
+
+---
+
+<!-- source: https://github.com/kvz-platform/kvz/blob/main/docs/getting-started.md -->
+
+# Getting started
+
+This guide takes you from installing kvz to a cluster running all three kinds
+of pods. It takes a few minutes.
+
+## What you need
+
+- An **Apple Silicon Mac** (M1 or later) running **macOS 26 or later**.
+- **`kubectl`**, or use the one built into kvz (`kvz kubectl`).
+- **`tart`**, only if you want macOS pods from OCI images.
+
+## 1. Install kvz
+
+```sh
+brew install kvz-platform/tap/kvz
+```
+
+This installs `kvz` and the small Linux kernel that pods boot (about 9 MB).
+Update later with `brew upgrade kvz`.
+
+Without Homebrew, download `kvz-<version>-darwin-arm64.tar.gz` from the
+[releases page](https://github.com/kvz-platform/kvz/releases), unpack it and run
+`bin/kvz` from inside it (it finds the kernel in `share/kvz/kernel` next to it):
+
+```sh
+tar -xzf kvz-v1.37.2-2-darwin-arm64.tar.gz
+cd kvz-v1.37.2-2-darwin-arm64
+xattr -dr com.apple.quarantine .   # only if a browser downloaded it
+./bin/kvz server
+```
+
+Early releases are ad-hoc signed rather than notarized, so a browser download
+needs the `xattr` line before macOS will run it. Homebrew and `curl` downloads
+don't.
+
+## 2. Or build from source
+
+Skip this if you used Homebrew. To build from source you also need Go, the
+Xcode command line tools, and Apple's `container` tool (used once, to build the
+kernel).
+
+```sh
+git clone https://github.com/kvz-platform/kvz && cd kvz
+make build                 # bin/kvz, signed for Virtualization.framework
+./kernel/build.sh          # the pod kernel, into ~/.kvz/kernel/Image
+```
+
+The steps below write `kvz`. From a source build, that's `./bin/kvz`.
+
+## 3. Start the cluster
+
+```sh
+kvz server
+```
+
+kvz starts etcd, the API server, the scheduler, the controllers and a local
+node, all in this one process. When it's ready it prints:
+
+```
+kvz server ready in 1.7s
+  export KUBECONFIG=/Users/you/.kvz/kubeconfig.yaml
+  join: kvz agent --server https://192.168.1.20:6443 --token <token in /Users/you/.kvz/join-token>
+  logs: /Users/you/.kvz/kvz.log (--verbose to stream them here)
+```
+
+Copy the `export` line into another terminal. The `join` line is for adding
+more Macs later. It doesn't show the join token itself, so the output is safe
+to share; the token is in the file it names. The Kubernetes components log to
+`kvz.log` rather than the terminal; run `kvz server --verbose` to see them
+live. (When kvz runs as a service, or its output goes to a file or pipe, the
+full logs go to that output as usual.)
+
+## 4. Run a Linux pod
+
+```sh
+export KUBECONFIG=~/.kvz/kubeconfig.yaml
+kubectl run web --image=nginx:alpine
+kubectl get pods -o wide
+```
+
+The pod gets its own cold-booted VM and its own IP address. Pods without a
+`runtimeClassName` use the Linux runtime.
+
+## 5. Run a native macOS pod
+
+Native pods are plain macOS processes. They're useful for anything that needs
+the host itself, such as Xcode, code signing or the GPU.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-mac
+spec:
+  runtimeClassName: darwin
+  restartPolicy: Never
+  containers:
+    - name: main
+      image: host          # not pulled; native pods run on the host
+      command: ["/usr/bin/sw_vers"]
+```
+
+```sh
+kubectl apply -f hello-mac.yaml
+kubectl logs hello-mac
+```
+
+Native pods must set `command`. Each pod gets its own working directory, passed
+in as `$KVZ_POD_DIR`.
+
+## 6. Run a macOS VM pod
+
+A macOS pod is a full macOS virtual machine. Its disk is a copy-on-write clone,
+so starting one is instant on disk, and the VM is ready for `exec` once SSH
+answers (about 15 to 20 seconds).
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mac
+spec:
+  runtimeClassName: macos
+  containers:
+    - name: vm
+      image: ghcr.io/cirruslabs/macos-tahoe-base:latest
+```
+
+```sh
+kubectl apply -f mac.yaml
+kubectl exec mac -- sw_vers
+```
+
+macOS allows two macOS VMs per Mac. Extra macOS pods wait with the reason
+`WaitingForVMSlot` until a slot frees up.
+
+## 7. Add more Macs
+
+On each extra Mac, install kvz and run the `join` command the server printed,
+with the token from the server's `~/.kvz/join-token`:
+
+```sh
+kvz agent --server https://192.168.1.20:6443 --token K10…::…
+```
+
+The new Mac shows up in `kubectl get nodes`, and pods spread across all of
+them. Pods on different Macs can reach each other and use the same Services.
+
+For more than a couple of Macs (headless Mac minis, high availability, ports,
+automatic login, verification), follow [Fleet setup](fleet.md).
+
+## 8. Run kvz in the background
+
+To keep kvz running after you close the terminal, and start it at login:
+
+```sh
+kvz install server        # or: kvz install agent --server … --token …
+```
+
+This installs a launchd service and starts it. Logs go to `~/.kvz/logs`. Remove
+it with `kvz uninstall`.
+
+## Next
+
+- [Runtimes](runtimes.md): what each kind of pod is and how to pick one
+- [Kubernetes features](kubernetes-features.md): what works today
+- [Operations](operations.md): flags, snapshots and uninstalling
+
+---
+
+<!-- source: https://github.com/kvz-platform/kvz/blob/main/docs/operations.md -->
+
+# Operations
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `kvz server` | Runs the control plane and, unless `--disable-agent` is set, a local node |
+| `kvz agent --server URL --token TOKEN` | Joins this Mac to a cluster as a node |
+| `kvz install server` / `kvz install agent …` | Installs kvz as a launchd service that starts now and at login |
+| `kvz uninstall` | Removes the service. Add `--purge` to also delete `~/.kvz` |
+| `kvz etcd-snapshot save` / `ls` / `delete` | Manages snapshots of the cluster datastore |
+| `kvz kubectl …` | Runs a kubectl that matches the cluster's version |
+| `kvz version` | Prints the version |
+
+## Server flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--https-listen-port` | `6443` | API server port. The join endpoint uses the next port. |
+| `--etcd-port` | `2379` | Embedded etcd client port |
+| `--disable-agent` | off | Run only the control plane, with no local node |
+| `--disable` | none | Skip bundled add-ons: `traefik`, `helm-controller`, `local-storage`, `metrics-server`, `upgrade-controller` |
+| `--etcd-sync` | `barrier` | How etcd flushes writes: `full`, `barrier` (crash-consistent) or `none` |
+| `--etcd-snapshot-interval` | `12h` | How often to take automatic snapshots. `0` turns them off. |
+| `--etcd-snapshot-retention` | `5` | How many automatic snapshots to keep |
+| `--cluster-reset-restore-path` | none | Restore the datastore from a snapshot before starting |
+| `--cluster-init` | off | Start a cluster that more servers can join (high availability) |
+| `--server`, `--token` | none | Join an existing cluster as another server |
+| `--secrets-encryption` | off | Encrypt Secrets at rest (AES-CBC). Stays on once enabled. |
+| `--kube-apiserver-arg`, `--kube-controller-manager-arg`, `--kube-scheduler-arg` | none | Extra flags for a component, as `name=value`; repeatable |
+| `--tls-san` | none | Extra names or IPs for the API server certificate |
+
+## Node flags (server and agent)
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--node-name` | the Mac's host name | Name of this node |
+| `--node-ip` | the Tailscale IP if present, otherwise the main IP | Address other nodes use to reach this one |
+| `--data-dir` | `~/.kvz` | Where kvz keeps its state |
+| `--default-runtime` | `linux` | Runtime for pods without `runtimeClassName` |
+| `--max-pods` | `1000` | Pod capacity of this node |
+| `--kubelet-port` | `10250` | Port for `logs`, `exec` and metrics |
+| `--overlay-port` | `6446` | Port of the pod network link between nodes |
+| `--verbose` | off | Stream component logs to the terminal instead of `kvz.log` |
+
+## Files
+
+| Path | Contents |
+|---|---|
+| `~/.kvz/kubeconfig.yaml` | Admin kubeconfig for the cluster |
+| `~/.kvz/kernel/Image` | The pod kernel built by `kernel/build.sh`, used by source builds. Homebrew and release-tarball installs use the kernel shipped next to the binary (`$(brew --prefix)/share/kvz/kernel/Image`, plus its `config`) instead. Set `KVZ_KERNEL` to use another. |
+| `~/.kvz/server/manifests/` | YAML here is applied automatically, like k3s |
+| `~/.kvz/registries.yaml` | Registry mirrors and credentials (`KVZ_REGISTRIES` overrides the path) |
+| `~/.kvz/server/db/snapshots/` | etcd snapshots |
+| `~/.kvz/kvz.log` | Component logs when kvz runs in a terminal (the previous run's log is `kvz.log.1`) |
+| `~/.kvz/join-token` | The token other Macs join with (`kvz agent --token`) |
+| `~/.kvz/logs/` | Logs from the launchd service |
+| `~/.kvz/upgrade/state.json` | An automated upgrade that hasn't been confirmed yet, or the release that was rolled back |
+| `~/Library/LaunchAgents/dev.kvz.server.plist` | The installed service (or `dev.kvz.agent.plist`) |
+
+## Backups and restores
+
+```sh
+kvz etcd-snapshot save --name before-upgrade
+kvz etcd-snapshot ls
+kvz server --cluster-reset-restore-path ~/.kvz/server/db/snapshots/<file>
+```
+
+The server also takes a snapshot every 12 hours and keeps the five newest.
+
+## High availability
+
+Start the first server with `--cluster-init`, then join more servers with the
+same token. Each server runs the API server, controller-manager, scheduler
+and an etcd member; three servers tolerate the loss of one.
+
+```sh
+kvz server --cluster-init                                       # first Mac
+kvz server --server https://<first-mac>:6443 --token <token>    # each other server
+kvz agent  --server https://<any-server>:6443 --token <token>   # worker Macs
+```
+
+New servers join etcd as learners and are promoted once they have caught up.
+Agents keep a local load balancer in front of every server they know about, so
+they keep working when one server goes down. HA mode is remembered in the data
+dir, so restarts need no extra flags.
+
+## Registry mirrors
+
+`~/.kvz/registries.yaml` uses the k3s format. Mirrors are tried in order, then
+the registry itself:
+
+```yaml
+mirrors:
+  docker.io:
+    endpoint: ["https://mirror.gcr.io"]
+configs:
+  registry.example.com:
+    auth: {username: me, password: secret}
+    tls: {ca_file: /path/to/ca.pem}
+```
+
+## Helm charts
+
+The bundled Helm controller installs `HelmChart` objects, as in k3s:
+
+```yaml
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata: {name: podinfo, namespace: kube-system}
+spec:
+  repo: https://stefanprodan.github.io/podinfo
+  chart: podinfo
+  targetNamespace: default
+```
+
+## Debugging a node
+
+Every node serves Go profiles and a dump of its pod network (switch ports,
+addresses and the gateway's ARP cache) through the API server:
+
+```sh
+kvz kubectl get --raw /api/v1/nodes/<node>/proxy/debug/kvz/podnet
+kvz kubectl get --raw "/api/v1/nodes/<node>/proxy/debug/pprof/goroutine?debug=2"
+```
+
+## Upgrades
+
+To upgrade a whole cluster, apply an `upgrade.cattle.io/v1` Plan, the same API
+as the k3s system-upgrade-controller. kvz cordons, drains and upgrades each Mac
+in turn, control plane first, and rolls a node back if the new release doesn't
+start. See [upgrades.md](upgrades.md).
+
+Upgrading kvz upgrades the embedded etcd too, and etcd can't move a data
+directory back to an older version. Take a snapshot before upgrading
+(`kvz etcd-snapshot save`) if you might roll back.
+
+With several Macs, upgrade the servers first, then the agents, and don't leave
+them on different kvz versions longer than you need to (mixed versions aren't
+tested). Going from kvz on Kubernetes 1.35 straight to 1.37
+was tested on a running two-node cluster; existing objects and nodes carried
+over.
+
+## Joining Macs securely
+
+The join token looks like `K10<hash>::<secret>`, the same format as k3s. The
+hash pins the cluster's certificate authority, so a new node can verify the
+server before it sends the secret. Each node then gets its own certificate,
+limited to what a node is allowed to do.
+
+## Uninstalling
+
+```sh
+kvz uninstall            # remove the launchd service
+kvz uninstall --purge    # also delete ~/.kvz: cluster state, images, kernel and volumes
+```
+
+---
+
+<!-- source: https://github.com/kvz-platform/kvz/blob/main/docs/upgrades.md -->
+
+# Automated upgrades
+
+kvz upgrades itself across a cluster from `upgrade.cattle.io/v1` **Plan**
+objects, the same API as the k3s
+[system-upgrade-controller](https://docs.k3s.io/upgrades/automated). Plans
+written for k3s apply unchanged; kvz runs the controller itself, so there is
+nothing to install.
+
+```yaml
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: kvz
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  drain: {force: true, timeout: 5m}
+  version: v1.35.10-2          # or: channel: https://github.com/kvz-platform/kvz/releases/latest
+```
+
+```sh
+kvz kubectl create namespace system-upgrade
+kvz kubectl apply -f plan.yaml
+kvz kubectl -n system-upgrade get plans -o wide
+```
+
+## What happens
+
+1. The server resolves the Plan's `version`. A `channel` resolves to the last
+   path element of the URL it redirects to, so GitHub's `releases/latest`
+   works. Channels are checked every 15 minutes.
+2. It picks the nodes matching `nodeSelector` (all nodes if unset).
+   Control-plane nodes go first, as with k3s: workers don't start until every
+   control-plane node in the Plan is done. Then up to `concurrency` nodes
+   (default 1) run at a time.
+3. With `cordon` or `drain`, it cordons the node, and with `drain` evicts its
+   pods (`kubectl drain` semantics: `force`, `timeout`, `gracePeriod`,
+   `deleteEmptydirData`, `ignoreDaemonSets` (default true), `disableEviction`,
+   `podSelector`).
+4. The node's kvz downloads
+   `kvz-<version>-darwin-arm64.tar.gz` and checks it against its `.sha256`.
+   It then checks the new binary itself: a valid code signature, the
+   virtualization entitlement, the same signing team as the running binary
+   (when that one is Developer ID signed), and that `kvz version` reports the
+   expected release.
+5. It swaps `bin/kvz` and, for Homebrew and tarball installs, the pod kernel
+   in `share/kvz/kernel`. Each rename is atomic, and the old files are kept as
+   `*.prev`. Then kvz restarts.
+6. When the node is Ready on the new release, the server uncordons it (unless
+   it was cordoned before), labels it `plan.upgrade.cattle.io/<plan>=<hash>`
+   and moves on.
+
+A node already on the Plan's version is just labeled. Upgrading the server
+restarts the API server; the controller picks up where it left off, because
+its progress is kept on the Node objects.
+
+## Restarts and rollback
+
+Run kvz as a service (`kvz install server|agent`). Under launchd, kvz exits
+after installing the new binary and launchd starts it again. That also makes
+rollback possible: a newly installed binary that starts three times without its
+node becoming Ready puts the previous files back and restarts into them. The
+node then reports
+`Failed: <version> started 3 times without its node becoming Ready; rolled
+back to <previous>`, and the Plan stays incomplete until you change its
+version.
+
+In a terminal, kvz starts the new binary itself and exits, so the new kvz runs
+in the background. There is nothing to restart a binary that keeps crashing,
+so there is no automatic rollback in that mode.
+
+## Status
+
+```sh
+kvz kubectl -n system-upgrade get plans -o wide           # Complete and a per-node message
+kvz kubectl get nodes -L plan.upgrade.cattle.io/kvz
+kvz kubectl get node <node> -o jsonpath='{.metadata.annotations}'
+```
+
+| Annotation on the node | Set by | Meaning |
+|---|---|---|
+| `kvz.dev/release` | node | The kvz release the node runs (set once it's Ready on it) |
+| `upgrade.kvz.dev/plan` | server | The Plan upgrading this node |
+| `upgrade.kvz.dev/apply`, `upgrade.kvz.dev/url` | server | Install this release from this URL (set after the drain) |
+| `upgrade.kvz.dev/status` | node | `Downloading`, `Verifying`, `Restarting into …`, `Failed: …` |
+
+A failed download or check is retried every 2 minutes and leaves the node
+cordoned, as upstream does. Deleting a Plan releases its nodes and uncordons
+the ones it had cordoned.
+
+## kvz-specific settings
+
+| Plan annotation | Meaning |
+|---|---|
+| `upgrade.kvz.dev/release-url` | Tarball URL template, e.g. `https://mirror.example.com/kvz-{version}-darwin-arm64.tar.gz`. The checksum must be at the same URL plus `.sha256`. |
+| `upgrade.kvz.dev/allow-downgrade: "true"` | Allow moving to a lower release number. Downgrades are refused by default, because etcd can't open a data directory written by a newer version. Take a snapshot first. |
+
+Fields that only make sense for upstream's Job-based upgrades (`upgrade.image`,
+`prepare`, `serviceAccountName`, `tolerations`, `secrets`) are accepted and
+ignored.
+
+## Notes
+
+- Nodes running a kvz without this feature can't upgrade themselves. Upgrade
+  them once by hand (`brew upgrade kvz`, or the release tarball).
+- A server started with `--disable-agent` has no node, so Plans can't select
+  it. Upgrade it by hand.
+- Homebrew installs are upgraded in place inside the Cellar. Homebrew still
+  lists the old version until the next `brew upgrade kvz`, which installs the
+  same files.
+- If you run the upstream system-upgrade-controller instead, start servers
+  with `--disable upgrade-controller`.
+
+---
+
+<!-- source: https://github.com/kvz-platform/kvz/blob/main/docs/runtimes.md -->
+
+# Runtimes
+
+Every kvz node runs pods in one of four runtimes. You pick one with the pod's
+`runtimeClassName`. kvz creates the matching RuntimeClass objects for you when
+the server starts.
+
+| `runtimeClassName` | A pod is | Ready in | Use it for |
+|---|---|---|---|
+| `linux` (default) | its own Linux microVM | about 100 ms | ordinary container images |
+| `macos` | a full macOS virtual machine | 15 to 20 s | macOS CI, testing on a clean macOS |
+| `darwin` | native macOS processes on the host | about 15 to 50 ms | Xcode, code signing, GPU work |
+| `apple` | a container run by Apple's `container` tool | about 0.6 to 0.8 s | the original v1 runtime, kept for comparison |
+
+## linux
+
+This is the default, so pods without a `runtimeClassName` land here.
+
+Each pod boots its own small VM through Apple's Virtualization.framework:
+
+- **Kernel and init:** the kvz kernel (8.5 MB) and a tiny init program that
+  starts your container.
+- **Filesystem:** the image is shared into the VM read-only, with a writable
+  layer on top in memory.
+- **Network:** each pod gets its own IP address on kvz's pod network.
+
+Nothing is pre-started or cached: every pod is a cold boot, and it still
+reaches Ready in about 100 ms.
+
+**Limits.**
+
+- **VMs per Mac:** Virtualization.framework allows about 127 VMs per Mac. kvz
+  runs up to 120 pod VMs per node and queues the rest with the reason
+  `WaitingForVMSlot`. Add more Macs to go past that.
+- **Pod-to-pod bandwidth:** because pods don't share a kernel, traffic between
+  them is slower than in a single-VM cluster. It measures 30 to 50 Gbps per
+  stream, against about 85 Gbps elsewhere.
+
+## macos
+
+A macOS pod is a whole macOS virtual machine. The image can be:
+
+- a local VM bundle in tart's layout (`disk.img`, `nvram.bin`, `config.json`),
+- a path to such a bundle, or
+- an OCI image reference, which kvz pulls with `tart pull`.
+
+When the pod starts, kvz clones the disk with APFS `clonefile`. That's instant
+even for a 50 GB disk, and the clone is thrown away when the pod is deleted. The
+pod becomes Ready once the guest answers SSH. `kubectl exec` and `kubectl logs`
+run over that SSH connection.
+
+If the first container sets a `command`, kvz runs it inside the guest. Its exit
+code ends the pod, which makes macOS pods work well as Jobs.
+
+**Limits.** macOS allows two macOS VMs per Mac. Extra macOS pods wait with
+`WaitingForVMSlot`.
+
+## darwin
+
+A native pod runs its containers as ordinary processes on the Mac itself, with:
+
+- **A working directory:** each pod gets its own, passed in as `$KVZ_POD_DIR`.
+- **Restarts:** handled with the pod's `restartPolicy`, backing off like the
+  kubelet does.
+- **Clean shutdown:** deleting the pod stops its whole process group, honoring
+  the grace period.
+
+Native pods must set `command`. The `image` field is required by Kubernetes, but
+this runtime doesn't use it.
+
+Native pods share the host's network, so they use the Mac's own IP address.
+
+## apple
+
+This was kvz's first Linux runtime. It runs each container through Apple's
+`container` daemon. That daemon starts VMs one at a time, at about two per
+second, so it's much slower under load than `linux`. It's kept mainly as a
+benchmark baseline.
+
+## Choosing a default
+
+The node flag `--default-runtime` sets the runtime for pods without a
+`runtimeClassName`. It defaults to `linux`.
+
+---
+
+<!-- source: https://github.com/kvz-platform/kvz/blob/main/docs/kubernetes-features.md -->
+
+# Kubernetes features
+
+kvz runs upstream Kubernetes 1.37 (kube-apiserver, controller-manager and
+scheduler, unmodified) with embedded etcd 3.7. It is tested with the full
+Sonobuoy certified-conformance suite on a two-node cluster; see
+[Conformance](#conformance). This page lists what works today and the known
+limits.
+
+## Workloads
+
+- Deployments (scaling, rollouts), StatefulSets (with stable pod DNS names),
+  Jobs and plain Pods
+- Init containers, native sidecars, and `restartPolicy` with real
+  `CrashLoopBackOff` back-off
+- Startup, readiness and liveness probes (exec, HTTP, TCP; gRPC is checked as
+  TCP), `readinessGates`
+- `postStart` and `preStop` hooks, termination messages (including
+  `FallbackToLogsOnError`), `activeDeadlineSeconds`
+- Ephemeral containers (`kubectl debug`), which run inside the pod's VM and
+  share its network and processes
+- Kubelet-style pod events and condition reasons, `observedGeneration`
+
+## Resources and security
+
+- **CPU and memory limits** are enforced per container with cgroup v2
+  (`cpu.max`, `cpu.weight`, `memory.max`), exactly as on a Linux node. A
+  container that exceeds its memory limit is reported as `OOMKilled`.
+- **In-place resize** (`kubectl patch --subresource resize`) updates the limits
+  of running containers, or restarts them where `resizePolicy` asks for it.
+- Pods without a CPU limit can use every core of the Mac; pods without a
+  memory limit get 2 GiB (`KVZ_DEFAULT_MEMORY_MB`). Guest memory is only
+  backed by the Mac when it is used.
+- **Security context:** `runAsUser`, `runAsGroup`, `supplementalGroups`,
+  `fsGroup`, `runAsNonRoot`, `readOnlyRootFilesystem`, `privileged`,
+  capabilities (containerd's default set, plus `add` and `drop`) and
+  `allowPrivilegeEscalation`.
+- **Sysctls:** every pod has its own kernel, so all sysctls are pod-scoped
+  and allowed.
+- Each pod is its own VM: containers in different pods never share a kernel.
+
+## kubectl
+
+`exec` (with a terminal), `logs` (including `-f`, `--previous`, `--since` and
+`--tail`), `port-forward`, `attach` (interactive for containers with
+`stdin`/`tty`), `debug`, `cp`, `run --rm -i` and `top`.
+kvz also bundles a version-matched kubectl as
+`kvz kubectl`.
+
+## Networking
+
+- **Pod network:** every Linux pod has its own IP address on kvz's pod network,
+  an in-process switch. Pods on different Macs reach each other over an
+  authenticated overlay between nodes.
+- **Services:** `ClusterIP` load balancing across replicas, plus `NodePort` and
+  `LoadBalancer`, which are exposed on the Mac. `sessionAffinity: ClientIP`
+  works for all three.
+- **Cluster DNS:** a built-in server at `10.43.0.10` that answers
+  `cluster.local` like CoreDNS: service and headless records, StatefulSet pod
+  names, SRV, ExternalName, pod (`a-b-c-d.<ns>.pod`) and reverse records.
+  Other names go to the Mac's resolvers, so VPN and Tailscale names resolve
+  too. `dnsPolicy` and `dnsConfig` work.
+- **The API server reaches pods** (on every node), so admission and conversion
+  webhooks, aggregated API servers running in pods, and `kubectl proxy` to
+  pods and services work.
+- **NetworkPolicy:** enforced in the pod switch, for ingress and egress, pod and
+  namespace selectors, IP blocks and ports.
+- **Ingress:** Traefik is installed by default.
+- **Host networking:** `hostPort` (TCP and UDP, `hostIP`, conflict checks) and
+  `hostNetwork`. A `hostNetwork` pod shares the Mac's network as on a Linux
+  node: `127.0.0.1` and the node IP inside it are the Mac's, and every socket it
+  listens on appears on the Mac at the same address and port.
+
+## Storage and configuration
+
+- ConfigMaps and Secrets, including live updates to mounted volumes (within
+  about a second), `defaultMode` and item modes, optional sources
+- `emptyDir` (including `medium: Memory`), `hostPath` (directories and files),
+  projected and downward API volumes, `subPath` and `subPathExpr`
+- PersistentVolumeClaims through the built-in local-path provisioner, which is
+  the default StorageClass
+- Service account tokens bound to the pod, so in-cluster clients work
+- Image volumes (`volumes[].image`): an OCI image's files mounted read-only,
+  straight from the image store with nothing copied
+- `clusterTrustBundle` projections (CA bundles by name, or by signer and
+  label selector) and `podCertificate` projections (a per-pod key and
+  certificate from a signer, refreshed before expiry), using the kubelet's own
+  managers. Their files keep the volume's default mode: kvz can't yet set the
+  per-file owner (`user`, `fsGroup`) that makes the kubelet use 0600.
+
+## Images
+
+- Pull policies `Always`, `IfNotPresent` and `Never`
+- `imagePullSecrets` and Docker config credentials
+- `ErrImagePull` and `ImagePullBackOff` with retries
+- One shared store, keyed by image digest
+- Registry mirrors and credentials in `~/.kvz/registries.yaml`, in the k3s
+  format (see [Operations](operations.md#registry-mirrors))
+
+## Metrics
+
+kvz reports per-container CPU and memory from inside each pod VM and serves the
+`metrics.k8s.io` API, so `kubectl top` and HorizontalPodAutoscalers work. Each
+node also serves the kubelet's `/metrics`, `/metrics/cadvisor` and
+`/metrics/resource`, so Prometheus and an upstream metrics-server can scrape
+it.
+
+## Add-ons installed by default
+
+Traefik, the local-path provisioner, the metrics server and the k3s Helm
+controller (so `HelmChart` objects install charts). Skip any of them with
+`--disable traefik`, `--disable local-storage`, `--disable metrics-server` or
+`--disable helm-controller`. Put your own manifests in
+`~/.kvz/server/manifests` and kvz applies them automatically.
+
+## Known limits
+
+| Limit | Why |
+|---|---|
+| About 120 Linux pods per Mac | Virtualization.framework caps a Mac at about 127 VMs. Add Macs to scale out. |
+| Two macOS pods per Mac | macOS itself allows only two macOS guests per host |
+| Pod-to-pod bandwidth around 30 to 50 Gbps | Each pod is its own VM, so traffic can't stay inside one kernel |
+| Large bursts are CPU-bound | Starting a VM costs about 65 ms of CPU in Virtualization.framework |
+| No user namespaces, AppArmor or seccomp profiles | The VM boundary isolates pods; inside a pod, containers rely on capabilities |
+
+## Conformance
+
+kvz passes the full Kubernetes conformance suite:
+`sonobuoy run --mode certified-conformance` on a two-node cluster (two kvz nodes
+on an M5 Max) reports **454 of 454 tests passed** (Kubernetes 1.37.2).
+
+---
+
+<!-- source: https://github.com/kvz-platform/kvz/blob/main/docs/ARCHITECTURE.md -->
+
+# kvz architecture
+
+kvz is a k3s-shaped Kubernetes distribution for Apple Silicon Macs. One signed
+darwin/arm64 binary runs the whole control plane in-process, natively on
+macOS, plus a node agent whose pods are native macOS workloads.
+
+```
+                    ┌──────────────────────────── kvz server (one darwin process) ────────────────────────────┐
+ kubectl ──TLS──▶   │ kube-apiserver ── etcd (embedded, F_BARRIERFSYNC WAL) │ controller-manager │ scheduler   │
+                    │       ▲                                                                                  │
+                    │       │ client-go (node identity)                                                        │
+                    │  kvz node (virtual-kubelet, tuned queues) ── Provider mux (by RuntimeClass) ─┐            │
+                    │                                                                               │            │
+                    │  podnet: L2 switch + gateway + DHCP/DNS (gVisor netstack), 10.88.0.0/16 ◀───┼──┐         │
+                    └───────────────────────────────────────────────────────────────────────────┼──┼─────────┘
+                ┌────────────────────────────┬──────────────────────────┬────────────────────┘  │ SOCK_DGRAM socketpair
+                ▼                            ▼                          ▼                       │ per VM NIC
+   linux (default)                 macos                        darwin                         │
+   kvz microVM per pod             macOS VM per pod             native processes               │
+   kvz kernel + kvz-init (PID 1)   APFS clone, DHCP on podnet   fork/exec, pgid kill           │
+   virtiofs image + tmpfs overlay  SSH exec over podnet                                        │
+   vsock events + exec ────────────────────────────────────────────────────────────────────────┘
+   apple: Apple `container` daemon (v1 runtime, kept for comparison)
+```
+
+## Control plane
+
+* `k8s.io/kubernetes` v1.37.2 is imported as a library (staging modules pinned,
+  no fork). kube-apiserver, controller-manager and scheduler run in one darwin
+  process. Two shims make that possible:
+  * `logsapi.ReapplyHandling = ReapplyHandlingIgnoreUnchanged`
+  * scheduler via `app.Setup`/`app.Run`, avoiding a second process-wide signal
+    handler
+* **etcd WAL sync.** On darwin, etcd fsyncs with `F_FULLFSYNC`, which flushes
+  the SSD cache on every commit (≈4 ms per write). kvz vendors etcd's `fileutil`
+  and defaults to `F_BARRIERFSYNC`. It's a write-ordering barrier: crash-
+  consistent, though the most recent commits can be lost on sudden power loss.
+  It's what Apple recommends for databases, and roughly what a Linux guest's
+  fsync gets on Virtualization.framework anyway. `--etcd-sync=full` restores
+  strict durability. Effect: create→watch 4.0 → 0.5 ms.
+* **Local kubeconfig uses loopback.** Talking to the host's own Tailscale
+  address went through the VPN's network extension and cut API throughput
+  about 3×. `kubeconfig-external.yaml` carries the routable address.
+* Scheduler API QPS is raised to 500/1000. Cloud and volume controllers that
+  don't apply are disabled.
+* PKI: one ECDSA CA, Node+RBAC authorization, and k3s-style join tokens
+  (`K10<ca-sha256>::<secret>`).
+
+## Node (virtual-kubelet, vendored)
+
+* The pod controller is built directly, with a 2000 qps work-queue limiter
+  instead of client-go's default 10 qps (50 native pods: 6.8 s → 0.42 s).
+* **Patch:** finalize deleted pods as soon as the provider has stopped them.
+  Upstream always slept `DeletionGracePeriodSeconds` (1 pod: 1.05 s → 54 ms).
+* The provider pushes status through `PodNotifier`; there's no polling.
+
+## linux runtime: kvz microVMs
+
+Every pod is a cold-booted Linux microVM, built from scratch to boot fast:
+
+| piece | what it does | why |
+|---|---|---|
+| **kvz microVM monitor** (`pkg/microvm`) | Virtualization.framework through Code-Hex/vz, one VM per pod, booted concurrently | Apple's `container` daemon serializes VM starts at ~2/s per host |
+| **kvz kernel** (`kernel/`) | Linux 6.18 LTS from `allnoconfig` plus only what pods need, everything built in, 8.5 MB | Apple's 30 MB debug kernel takes 106 ms to reach init; this one takes 17 ms |
+| **kvz-init** (`cmd/kvz-init`, Go, static) | PID 1 from an uncompressed initramfs. Mounts proc/dev, the virtiofs share and the overlay root; configures the NIC over netlink; forks/chroots/execs the containers; reaps; restart policy; exec server | No init system, no image-format decoding, no DHCP; it reads `spec.json` and execs |
+| **rootfs** | Image unpacked once into the image store; every pod VM mounts it read-only over virtiofs, with a tmpfs upper dir in the guest (overlayfs) | Zero per-pod host disk work, and pods share the host page cache |
+| **one virtiofs device** | Multi-directory share: pod dir, image(s), hostPath volumes | Each virtio-pci device costs ~7 ms of guest boot |
+| **events over vsock** | `init` / `hello` / `started` / `exit` pushed to the host | Status goes straight to the API |
+| **exec over vsock** | Framed stdin/stdout/stderr/resize/exit protocol; pty support | `kubectl exec` without sshd in the guest |
+| **IP on spec** | The host allocates the pod IP before boot; the guest sets it over netlink without waiting for carrier | Kernel IP autoconfig waited ~25 ms for link carrier |
+
+Containers of a pod share the VM, so they share the pod's network namespace
+and IP, as in Kubernetes. Restart policy is implemented in kvz-init with
+kubelet-style `CrashLoopBackOff` status.
+
+### Cold boot timeline (single pod, Studio)
+
+```
+ 0 ms   CreatePod → spec.json written, NIC socketpair created
+ 1 ms   VZVirtualMachine created
+65 ms   VZ start returns (VZ XPC process up, memory mapped, kernel loaded)
+82 ms   kernel → /init (17 ms guest time)
+84 ms   overlay mounted, NIC configured, container exec'd → "started"
+~105–140 ms   pod Ready observed by a watching client (via apiserver)
+```
+
+## Pod network (`pkg/podnet`)
+
+Each node runs an in-process L2 switch plus L3 gateway (gVisor netstack via
+gvisor-tap-vsock). A pod VM's NIC is one end of a `SOCK_DGRAM` socketpair
+handed to `VZFileHandleNetworkDeviceAttachment`.
+
+* **Why not VZ NAT:** every NAT-attached VM creates a kernel `vmenet`
+  interface. Hard-stopped VMs leaked them on the Studio until the host
+  refused to create more (~251). From then on no VZ guest on that machine,
+  kvz's or anyone else's, had networking until reboot. With podnet a NIC is
+  just an fd.
+* Pod-to-pod traffic is switched in-process. Egress is NATed through host
+  sockets by the netstack, and DNS is served by the gateway.
+* `kubectl port-forward` dials the pod through the netstack.
+* macOS guests use the same network and get DHCP from the in-process server.
+* Static pod IPs come from the top half of the CIDR, DHCP from the bottom.
+
+## Bugs found and fixed upstream-style (vendored under `third_party/`)
+
+* **Code-Hex/vz:** vsock connections double-closed the fd owned by
+  `VZVirtioSocketConnection`. Under concurrency the second close hit whatever
+  file had reused the number (random EBADF, VMs failing to start). Fixed with
+  dup.
+* **Code-Hex/vz:** `NewFileHandleNetworkDeviceAttachment` keeps no reference
+  to the `*os.File`, so Go's finalizer could close a live NIC. kvz owns the
+  file for the VM's lifetime.
+* **virtual-kubelet:** the grace-period sleep before finalizing deletion
+  (above).
+
+## macos runtime
+APFS `clonefile` of the VM bundle (a 50 GB disk in under 1 ms), a fresh
+machine identifier, a NIC on podnet, DHCP from the in-process server, and
+readiness gated on a working SSH login. If container 0 has a command, it runs
+over SSH and its exit completes the pod. The kernel limit is 2 concurrent macOS
+guests per host (`kvz.dev/macos-vm: 2`).
+
+## darwin runtime
+Native processes with a per-pod working dir, process-group kill honoring the
+grace period, and restart policy with backoff.
+
+## Limits
+* **~127 concurrent VMs per Mac:** a hard Virtualization.framework /
+  hypervisor limit, independent of guest RAM, and so a cap on concurrent
+  linux pods per node. Native darwin pods aren't affected. Multi-Mac clusters
+  scale it out.
+* Not implemented yet: Services/kube-proxy, cluster DNS, cross-node pod
+  routing, projected SA tokens in pod volumes, stats summary.
+
+---
+
+<!-- source: https://github.com/kvz-platform/kvz/blob/main/SECURITY.md -->
+
+# Security policy
+
+kvz runs a Kubernetes control plane and starts virtual machines on your Mac,
+so we take security reports seriously.
+
+## Reporting a vulnerability
+
+**Please don't open a public issue.** Report it privately through GitHub:
+
+**[Report a vulnerability](https://github.com/kvz-platform/kvz/security/advisories/new)**
+
+Include what you found, how to reproduce it, the kvz version (`kvz version`)
+and your macOS version. If you have a fix in mind, describe it, but don't open
+a public pull request for it.
+
+## What to expect
+
+- We aim to acknowledge your report within **3 business days**.
+- We'll keep you updated while we investigate, and agree on a disclosure date
+  with you. We aim to release a fix within **90 days**, sooner for severe issues.
+- Once a fix is released, we publish a GitHub security advisory and credit you,
+  unless you'd rather stay anonymous.
+
+## Supported versions
+
+Only the **latest release** gets security fixes. kvz releases are cumulative,
+so upgrading (`brew upgrade kvz`) is how you pick up a fix.
+
+## Scope
+
+In scope: the `kvz` binary and everything it runs, including the control plane,
+the node agent, the pod network, the join protocol and tokens, the guest init
+inside pod VMs, and the release artifacts and Homebrew formula.
+
+Out of scope: vulnerabilities in upstream Kubernetes, etcd or macOS itself.
+Report those to their projects. If kvz makes one of them worse or easier to
+reach, that part is in scope.
