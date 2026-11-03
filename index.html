@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kvz · native macOS kubernetes</title>
+  <meta name="description" content="Upstream Kubernetes 1.35 in one Go binary for Apple Silicon. Every Linux pod is its own microVM, next to macOS VMs and native Mac processes, in one cluster.">
+  <meta name="theme-color" content="#000000">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <meta property="og:title" content="kvz · native macOS kubernetes">
+  <meta property="og:description" content="Upstream Kubernetes in one binary. Linux pods as microVMs, macOS VM pods and native Mac pods in one cluster.">
+  <meta property="og:image" content="https://kvz.systems/assets/og.png">
+  <meta property="og:url" content="https://kvz.systems/">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav__inner">
+    <a class="nav__logo" href="#top" aria-label="kvz home"><img src="assets/kvz-white.svg" alt="kvz"></a>
+    <nav class="nav__links" aria-label="Sections">
+      <a href="#features">Features</a>
+      <a href="#runtimes">Runtimes</a>
+      <a href="#benchmarks">Benchmarks</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/kvz-platform/kvz/tree/main/docs">Docs</a>
+    </nav>
+    <a class="pill" href="https://github.com/kvz-platform/kvz">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span>kvz-platform/kvz</span>
+    </a>
+  </div>
+</header>
+
+<main>
+
+<!-- ============ hero ============ -->
+<section class="hero" id="top">
+  <div class="hero__grid" aria-hidden="true"></div>
+  <div class="hero__inner">
+    <div class="hero__left">
+      <h1 class="hero__logo"><img src="assets/kvz-rainbow.svg" alt="kvz"></h1>
+      <p class="hero__sub">native macOS kubernetes</p>
+      <div class="hero__stats">
+        <div><b><span data-count="99">99</span> ms</b><span class="lbl">one pod to Ready</span></div>
+        <div><b><span data-count="257">257</span> MB</b><span class="lbl">memory at idle</span></div>
+        <div><b><span data-count="1000" data-sep>1,000</span></b><span class="lbl">pod VMs, 0 failures</span></div>
+      </div>
+    </div>
+    <div class="hero__right">
+      <p class="hero__lede">Upstream Kubernetes 1.35 in one binary for Apple Silicon. Every Linux pod boots as its own VM in about 100&nbsp;ms, next to macOS VMs and native Mac processes, in the same cluster.</p>
+      <div class="hero__cta">
+        <button class="install" data-copy="brew install kvz-platform/tap/kvz" aria-label="Copy install command">
+          <span class="install__cmd"><span class="dim">$</span> brew install kvz-platform/tap/kvz</span>
+          <span class="install__copy">Copy</span>
+        </button>
+        <a class="link-arrow" href="#features">See what's inside</a>
+      </div>
+      <div class="tile termtile live-tile">
+      <div class="glass term live" data-glass aria-label="A recorded kvz session, playing on a loop" role="img">
+        <div class="term__bar"><i></i><i></i><i></i><span>kvz — zsh</span></div>
+        <div class="term__body live__body" data-live></div>
+      </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ features bento ============ -->
+<section class="section" id="features">
+  <div class="section__head reveal">
+    <p class="eyebrow">Why kvz</p>
+    <h2>Kubernetes that runs on the Mac,<br>not in a VM on the Mac.</h2>
+  </div>
+
+  <div class="bento">
+    <article class="tile span-7 center textured tex-warm reveal">
+      <div class="display grad-warm">No Linux VM</div>
+      <p class="label">The control plane runs directly on macOS</p>
+    </article>
+
+    <article class="tile span-5 center reveal">
+      <div class="proc">
+        <span class="node" style="--c:#ff4d6d;--i:0"><i></i>kube-apiserver</span>
+        <span class="node" style="--c:#ffb020;--i:1"><i></i>etcd</span>
+        <span class="node" style="--c:#2ee06d;--i:2"><i></i>scheduler</span>
+        <span class="node" style="--c:#2f8cff;--i:3"><i></i>controllers</span>
+      </div>
+      <p class="label">Upstream Kubernetes 1.35 in one process</p>
+    </article>
+
+    <article class="tile span-7 tall termtile reveal">
+      <p class="copy"><b>Linux, macOS and native pods</b> in one cluster</p>
+      <div class="glass term term--crop" data-glass>
+        <div class="term__bar"><i></i><i></i><i></i><span>kvz — zsh</span></div>
+        <div class="term__body">
+          <div><span class="dim">~ ❯</span> kubectl get pods -o custom-columns-file=runtime.cols</div>
+          <div class="trow dim"><span>NAME</span><span>RUNTIME</span><span>STATUS</span></div>
+          <div class="trow" style="--i:0"><span>web-7d9f6</span><span>linux</span><span class="ok">Running</span></div>
+          <div class="trow" style="--i:1"><span>ios-build</span><span>darwin</span><span class="ok">Running</span></div>
+          <div class="trow" style="--i:2"><span>macos-ci-0</span><span>macos</span><span class="ok">Running</span></div>
+        </div>
+      </div>
+    </article>
+
+    <article class="tile span-5 tall center reveal">
+      <p class="lead-text">One pod to Ready in</p>
+      <div class="mega grad-cool"><span data-count="99">99</span><span class="unit">ms</span></div>
+      <p class="label">4× faster than k3s in Lima</p>
+    </article>
+
+    <article class="tile span-6 reveal">
+      <div class="burst">
+        <div class="burst__num grad-yellow"><span data-count="0.44" data-dec="2">0.44</span><span class="unit">s</span></div>
+        <div>
+          <div class="small-lead">to get 20 pods ready</div>
+          <div class="muted-lead">3× faster than k3s in Lima</div>
+        </div>
+      </div>
+      <div class="axis" data-axis></div>
+    </article>
+
+    <article class="tile span-3 reveal">
+      <div class="chart-title">API ready after restart</div>
+      <div data-gauge></div>
+    </article>
+
+    <article class="tile span-3 reveal">
+      <div class="chart-title">API creates per second</div>
+      <div data-rings></div>
+    </article>
+
+    <article class="tile span-3 center reveal">
+      <div class="vms" aria-hidden="true"><i class="lead"></i><i style="--i:1"></i><i style="--i:2"></i><i style="--i:3"></i></div>
+      <p class="label">Each pod runs<br>in its own VM</p>
+    </article>
+
+    <article class="tile span-5 reveal">
+      <div class="chart-title">0 failures in a 1,000 pod VM test</div>
+      <div class="soak" data-soak role="img" aria-label="20 rounds of 50 pod VMs, each finished in 0.55 to 0.71 seconds, none failed"></div>
+      <div class="note">50 pods per round on a Mac Studio</div>
+    </article>
+
+    <article class="tile span-4 reveal">
+      <div class="chart-title">Memory use at idle</div>
+      <div class="blocks">
+        <div class="blocks__grid" data-blocks role="img" aria-label="kvz 257 MB, Apple cluster 2.5 GB, k3s in Lima 3.2 GB; each block is 50 MB"></div>
+        <div class="blocks__legend">
+          <span><i class="k-kvz"></i><b>257 MB</b> kvz</span>
+          <span><i class="k-apple"></i><b>2.5 GB</b> Apple cluster</span>
+          <span><i class="k-k3s"></i><b>3.2 GB</b> k3s in Lima</span>
+          <span class="note">Each block is 50 MB</span>
+        </div>
+      </div>
+    </article>
+
+    <article class="tile span-12 center statement-tile reveal">
+      <div class="statement grad-violet">3–16× faster than<br>Kubernetes in a VM</div>
+      <p class="note">Medians from three M4 Mac minis, compared with k3s in Lima and Apple container cluster</p>
+    </article>
+  </div>
+</section>
+
+<!-- ============ runtimes: pinned, steps change as you scroll ============ -->
+<section class="rt" id="runtimes" data-step="0">
+  <div class="rt__sticky">
+    <div class="rt__text">
+      <p class="eyebrow">Runtimes</p>
+      <h2>Four kinds of pod.<br>One cluster.</h2>
+      <p class="rt__lede">Pick one with <code>runtimeClassName</code>. kvz creates the RuntimeClasses for you.</p>
+      <ol class="rt__steps">
+        <li data-i="0" style="--h1:#5cea94;--h2:#14b85a">
+          <div class="rt__name"><code>linux</code><span>default</span></div>
+          <p>Each pod boots its own small Linux VM through Virtualization.framework, cold, every time.</p>
+        </li>
+        <li data-i="1" style="--h1:#5fb0ff;--h2:#1f6fff">
+          <div class="rt__name"><code>macos</code></div>
+          <p>A full macOS virtual machine with a copy-on-write disk. Great for macOS CI and clean test machines.</p>
+        </li>
+        <li data-i="2" style="--h1:#ffa133;--h2:#ff6a00">
+          <div class="rt__name"><code>darwin</code></div>
+          <p>Native macOS processes on the host. For Xcode, code signing and the GPU.</p>
+        </li>
+        <li data-i="3" style="--h1:#b48cff;--h2:#7a45f5">
+          <div class="rt__name"><code>apple</code></div>
+          <p>A container run by Apple's <code>container</code> tool. kvz's first runtime, kept as a baseline.</p>
+        </li>
+      </ol>
+    </div>
+    <div class="rt__visual tile">
+      <div class="rt__stat">
+        <div class="rt__big" data-rt-big>100<span class="unit">ms</span></div>
+        <div class="rt__cap" data-rt-cap>to boot a Linux pod VM</div>
+      </div>
+      <div class="glass term rt__term" data-glass>
+        <div class="term__bar"><i></i><i></i><i></i><span>kvz — zsh</span></div>
+        <div class="term__body">
+          <div><span class="dim">~ ❯</span> kubectl get pods</div>
+          <div class="trow4 dim"><span>NAME</span><span>RUNTIME</span><span>STATUS</span><span>READY IN</span></div>
+          <div class="trow4" data-row="0"><span>web-7d9f6</span><span>linux</span><span class="ok">Running</span><span>0.1 s</span></div>
+          <div class="trow4" data-row="1"><span>macos-ci-0</span><span>macos</span><span class="ok">Running</span><span>18 s</span></div>
+          <div class="trow4" data-row="2"><span>ios-build</span><span>darwin</span><span class="ok">Running</span><span>46 ms</span></div>
+          <div class="trow4" data-row="3"><span>legacy-0</span><span>apple</span><span class="ok">Running</span><span>0.7 s</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ benchmarks ============ -->
+<section class="section" id="benchmarks">
+  <div class="section__head reveal">
+    <p class="eyebrow">Benchmarks</p>
+    <h2>Measured, not promised.</h2>
+    <p class="section__lede">kvz against k3s in Lima and Apple container cluster, median of three M4 Mac minis unless noted.</p>
+    <div class="legend">
+      <span><i class="k-kvz-rb"></i>kvz, in each chart's color</span>
+      <span><i style="background:#4a4a50"></i>k3s in Lima</span>
+      <span><i class="k-dash"></i>Apple container cluster</span>
+    </div>
+  </div>
+
+  <div class="bento">
+    <article class="tile span-7 reveal">
+      <div class="chart-title">Time until every pod is ready</div>
+      <div class="chart-sub">nginx pods started at once, lower is better</div>
+      <div data-line="pods"></div>
+    </article>
+    <article class="tile span-5 reveal">
+      <div class="chart-title">One pod to Ready</div>
+      <div class="chart-sub">lower is better</div>
+      <div data-cols="one"></div>
+    </article>
+    <article class="tile span-12 reveal">
+      <div class="chart-title">API server throughput</div>
+      <div class="chart-sub">2,000 ConfigMaps from 32 clients, operations per second, higher is better</div>
+      <div class="multiples" data-api></div>
+    </article>
+    <article class="tile span-6 reveal">
+      <div class="chart-title">Idle cost</div>
+      <div class="chart-sub">empty cluster, lower is better</div>
+      <div data-hbars="idle"></div>
+    </article>
+    <article class="tile span-6 reveal">
+      <div class="chart-title">API latency</div>
+      <div class="chart-sub">lower is better</div>
+      <div data-dots></div>
+    </article>
+    <article class="tile span-7 reveal">
+      <div class="chart-title">From 9.8 s to 0.25 s</div>
+      <div class="chart-sub">20 pods to Ready on a Mac Studio, after each change, log scale</div>
+      <div data-line="journey"></div>
+    </article>
+    <article class="tile span-5 reveal">
+      <div class="chart-title">Four Macs, one cluster</div>
+      <div class="chart-sub">a Mac Studio server with three Mac mini agents</div>
+      <div class="stats">
+        <div><b class="grad-warm"><span data-count="1.68" data-dec="2">1.68</span> s</b><span>for 200 Linux pods, each its own VM</span></div>
+        <div><b class="grad-warm"><span data-count="10.3" data-dec="1">10.3</span> s</b><span>for 1,000 macOS process pods</span></div>
+        <div><b class="grad-warm"><span data-count="50">50</span> s</b><span>for 8 macOS VMs, two per Mac</span></div>
+      </div>
+    </article>
+  </div>
+  <p class="foot reveal">Full method and raw numbers in <a href="https://github.com/kvz-platform/kvz/blob/main/docs/BENCHMARKS.md">BENCHMARKS.md</a>.</p>
+</section>
+
+<!-- ============ install ============ -->
+<section class="section" id="install">
+  <div class="section__head reveal">
+    <p class="eyebrow">Install</p>
+    <h2>A cluster in under a minute.</h2>
+    <p class="section__lede">Needs an Apple Silicon Mac with macOS 26 or later.</p>
+  </div>
+  <div class="install-grid">
+    <div class="tile termtile termtile--full reveal">
+      <div class="glass term term--free" data-glass>
+        <div class="term__bar"><i></i><i></i><i></i><span>kvz — zsh</span></div>
+        <div class="term__body" data-typer>
+          <div class="tline" data-cmd="brew install kvz-platform/tap/kvz"></div>
+          <div class="tline out" data-out="🍺  kvz v1.35.10-1 installed"></div>
+          <div class="tline" data-cmd="kvz server"></div>
+          <div class="tline out" data-out="kvz server ready in 1.7s"></div>
+          <div class="tline out dim" data-out="  export KUBECONFIG=~/.kvz/kubeconfig.yaml"></div>
+          <div class="tline" data-cmd="kubectl run web --image=nginx:alpine"></div>
+          <div class="tline out" data-out="pod/web created"></div>
+          <div class="tline" data-cmd="kubectl get pods"></div>
+          <div class="tline out dim" data-out="NAME   READY   STATUS    AGE"></div>
+          <div class="tline out" data-out="web    1/1     Running   1s"></div>
+        </div>
+      </div>
+    </div>
+    <div class="docs">
+      <a class="tile doc reveal" href="https://github.com/kvz-platform/kvz/blob/main/docs/getting-started.md"><b>Getting started</b><span>From install to all three kinds of pod</span></a>
+      <a class="tile doc reveal" href="https://github.com/kvz-platform/kvz/blob/main/docs/runtimes.md"><b>Runtimes</b><span>What each kind of pod is and how to pick one</span></a>
+      <a class="tile doc reveal" href="https://github.com/kvz-platform/kvz/blob/main/docs/kubernetes-features.md"><b>Kubernetes features</b><span>What works today, and the known limits</span></a>
+      <a class="tile doc reveal" href="https://github.com/kvz-platform/kvz/blob/main/docs/operations.md"><b>Operations</b><span>Flags, snapshots, joining Macs, uninstalling</span></a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer__art reveal" data-ascii>
+    <pre aria-hidden="true">native·ma.
+ive·macOS.
+·macOS·ku.
+cOS·kuber.
+·kubernet.
+bernetes·.
+netes··na.             .+***#########*****=                  =****#######******************************-
+es··nativ.            +etes··native·macOS·k.                .macOS·kubernetes··native·macOS·kubernetes·+
+·native·m.          =%es··native·macOS·kube#                #OS·kubernetes··native·macOS·kubernetes··na+
+tive·macO.        -%s··native######%kubernet=              =·kuberne%#######################%tes··nativ+
+e·macOS·k.      :#··native·#:      :ernetes··:            :ubernetes:                     .+s··native·+.
+acOS·kube.    .*·native·m#-         =tes··nat#            #rnetes··=                     =%·native·m*.
+S·kuberne.  .+native·ma%-            #·native·=          =etes··na#                    =%native·ma*:
+ubernetes. =%tive·mac%=              .%ive·macO:        :es··nati%.                  -%ative·mac#:
+rnetes··n=%ive·macOS·+                -·macOS·k#        #·native·-                 :#tive·macO#:
+tes··native·macOS·kube#.               +OS·kuber+      +ative·ma+                :#ive·macOS%-
+··native·macOS·kubernet%-               #ubernete:    :ive·macO#               .*ve·macOS·%-
+ative·macOS·k#::%netes··n*              .rnetes··#    #·macOS·k.             .+e·macOS·k%=
+ve·macOS·ku#-   .*s··nativ%:             -es··nati+  +acOS·kub-            .+·macOS·kub=
+macOS·kub%-       =ative·mac=             *native·m::OS·kuber*            =%acOS·kube+.
+OS·kubern.         :%·macOS·k*.           .%ve·macO##kuberne%.          =%cOS·kuber+.
+kubernete.          .#OS·kuber%-           :macOS·kubernetes:         .%OS·kubern%-:::::::::::::::::::::
+ernetes··.            +ubernetes+           =S·kubernetes··=          -·kubernetes··native·macOS·kuberne
+etes··nat.             :%etes··na#.          #bernetes··na#           -bernetes··native·macOS·kubernetes
+s··native.              .#··native·=         .%etes··nati%.           -netes··native·macOS·kubernetes··n</pre>
+    <span class="sr-only">kvz</span>
+  </div>
+  <div class="footer__inner">
+    <div class="footer__brand">
+      <img src="assets/kvz-white.svg" alt="kvz">
+      <span>native macOS kubernetes · for Apple Silicon Macs on macOS 26 and later</span>
+    </div>
+    <nav class="footer__links">
+      <a href="https://github.com/kvz-platform/kvz">GitHub</a>
+      <a href="https://github.com/kvz-platform/kvz/tree/main/docs">Docs</a>
+      <a href="https://github.com/kvz-platform/kvz/releases">Releases</a>
+      <a href="https://github.com/kvz-platform/kvz/blob/main/SECURITY.md">Security</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="main.js" defer></script>
+</body>
+</html>
