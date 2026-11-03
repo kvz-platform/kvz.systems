@@ -1,0 +1,50 @@
+# kvz
+
+> kvz is Kubernetes that runs natively on macOS (Apple Silicon, macOS 26 or later). It is a single binary in the spirit of k3s: etcd, the API server, scheduler and controllers run as one macOS process, with no Linux VM underneath. Every Linux pod is its own lightweight VM (Ready in about 100 ms); macOS VM pods and native macOS process pods run in the same cluster. It embeds Kubernetes v1.37 and passes all 454 tests of the certified-conformance suite. Several Macs (for example a fleet of Mac minis) join into one cluster.
+
+This file is for AI agents. To set up kvz on one or more Macs, follow "Agent instructions" below, then read the fleet guide for every detail. All documentation links point at raw Markdown on GitHub, which is always the current version.
+
+## Agent instructions: set up a fleet of Macs
+
+Work over SSH, as the macOS user that will run kvz (an administrator). Check each step before the next. Never print or commit the join token or kubeconfig contents in logs or issues.
+
+1. **Plan.** Pick one Mac as the first server. With 3 or more Macs where uptime matters, use 3 servers (high availability) and make the rest agents; otherwise 1 server and the rest agents. Never use exactly 2 servers.
+2. **Check every Mac.** `uname -m` is `arm64`; `sw_vers -productVersion` is 26 or later; at least 20 GB free. Host names must be unique (node name = host name, lowercased, without `.local`); fix with `sudo scutil --set HostName|LocalHostName|ComputerName <name>`.
+3. **Keep every Mac awake and logged in.** `sudo pmset -a sleep 0 disksleep 0 displaysleep 0 autorestart 1`. kvz runs in the user's GUI login session (Virtualization.framework needs it), so turn on automatic login (`sudo sysadminctl -autologin set -userName "$USER" -password '…'`; FileVault must be off). Check: `launchctl print gui/$(id -u) >/dev/null && echo ok`.
+4. **Network.** Every Mac must reach every other Mac. Tailscale on every Mac is recommended: kvz advertises the Tailscale address automatically. On a plain LAN, use fixed addresses and pass `--node-ip <address>` if a Mac has several interfaces. Open TCP 6443 and 6444 (servers), 10250 and 6446 (every Mac), 2380 (between servers, HA only). On a LAN, macOS may need Local Network permission for kvz (System Settings → Privacy & Security → Local Network); symptom: `no route to host` to an address that answers ping.
+5. **Install on every Mac.** `brew install kvz-platform/tap/kvz`, then `kvz version`; it must match on every Mac.
+6. **First server.** `kvz install server` (or `kvz install server --cluster-init` for HA). Wait: `until kvz kubectl get nodes 2>/dev/null | grep -q ' Ready'; do sleep 1; done`. Then read the join token from `~/.kvz/join-token`, and the server URL with `awk '/server:/{print $2}' ~/.kvz/kubeconfig-external.yaml`.
+7. **More servers (HA only), one at a time.** `kvz install server --server <SERVER_URL> --token <TOKEN>`; wait for Ready before the next.
+8. **Agents (can run in parallel).** `kvz install agent --server <SERVER_URL> --token <TOKEN>`.
+9. **Verify on a server.** `kvz kubectl get nodes -o wide` lists every Mac as Ready. Then run the cross-Mac network check in section 8 of the fleet guide: every node must print `ok`.
+10. **If something fails,** use the troubleshooting table in section 11 of the fleet guide. Logs are in `~/.kvz/logs/kvz-server.log` or `kvz-agent.log` on each Mac. Re-running `kvz install …` with new flags replaces the service. `kvz uninstall --purge` resets a Mac completely (it deletes the cluster data on that Mac).
+
+## Setup guides
+
+- [Fleet setup](https://raw.githubusercontent.com/kvz-platform/kvz/main/docs/fleet.md): the complete, step-by-step guide for several Macs. Planning, preparing headless Mac minis, network and ports, install, high availability, verification, remote kubectl, day-2 operations, troubleshooting and how to report problems. Read this first.
+- [Getting started](https://raw.githubusercontent.com/kvz-platform/kvz/main/docs/getting-started.md): one Mac, first pods (Linux, macOS VM and native), running as a service, building from source.
+
+## Reference
+
+- [Operations](https://raw.githubusercontent.com/kvz-platform/kvz/main/docs/operations.md): every command, server and node flag, file path, backups and restores, high availability, registry mirrors, Helm charts, debugging a node, uninstalling.
+- [Automated upgrades](https://raw.githubusercontent.com/kvz-platform/kvz/main/docs/upgrades.md): upgrade a whole cluster with `upgrade.cattle.io/v1` Plans (the k3s system-upgrade-controller API), with drain and rollback.
+- [Runtimes](https://raw.githubusercontent.com/kvz-platform/kvz/main/docs/runtimes.md): Linux microVM pods, macOS VM pods and native macOS pods, and when to use each (`runtimeClassName`).
+- [Kubernetes features](https://raw.githubusercontent.com/kvz-platform/kvz/main/docs/kubernetes-features.md): what works (workloads, networking, storage, security, images, metrics, add-ons), the known limits (about 120 Linux pods per Mac, 2 macOS VM pods per Mac), and conformance results.
+- [Architecture](https://raw.githubusercontent.com/kvz-platform/kvz/main/docs/ARCHITECTURE.md): how kvz embeds Kubernetes on macOS: control plane, microVM monitor, pod network, storage.
+
+## Project
+
+- [GitHub repository](https://github.com/kvz-platform/kvz): source code, README and all docs.
+- [Releases](https://github.com/kvz-platform/kvz/releases): versions (`v<kubernetes version>-<release number>`), changelogs and tarballs (`kvz-<version>-darwin-arm64.tar.gz`, with the binary and the pod kernel).
+- [Homebrew tap](https://github.com/kvz-platform/homebrew-tap): `brew install kvz-platform/tap/kvz`.
+- [Report a bug](https://github.com/kvz-platform/kvz/issues/new/choose): include `kvz version`, `sw_vers -productVersion`, the number of Macs and their roles, `kvz kubectl get nodes -o wide` and the relevant part of `~/.kvz/logs/kvz-*.log`. Remove join tokens and kubeconfig contents first.
+- [Questions and ideas](https://github.com/kvz-platform/kvz/discussions)
+- [Report a security vulnerability privately](https://github.com/kvz-platform/kvz/security/advisories/new): never in a public issue. Policy: [SECURITY.md](https://raw.githubusercontent.com/kvz-platform/kvz/main/SECURITY.md).
+
+## Optional
+
+- [Benchmarks](https://raw.githubusercontent.com/kvz-platform/kvz/main/docs/BENCHMARKS.md): kvz against k3s in Lima and Apple's container cluster, per machine, with the method.
+- [Optimization report](https://raw.githubusercontent.com/kvz-platform/kvz/main/docs/REPORT.md): how Linux pod start went from 12 s to 0.25 s without VM pools or snapshots.
+- [Contributing](https://raw.githubusercontent.com/kvz-platform/kvz/main/CONTRIBUTING.md): building, testing and sending changes.
+- [Releasing](https://raw.githubusercontent.com/kvz-platform/kvz/main/docs/releasing.md): version numbers, CI and how releases ship.
+- [Full documentation in one file](https://kvz.systems/llms-full.txt): every document above, concatenated.
